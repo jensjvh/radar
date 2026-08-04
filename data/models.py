@@ -248,17 +248,16 @@ class Exercise(models.Model):
 
     @property
     def best_submissions(self):
-        students = self.submissions.values_list('student', flat=True).distinct()
-
-        best_submission_ids = []
-
-        for student in students:
-            best_submission = self.submissions.filter(student=student).order_by('-grade').first()
-            if best_submission:
-                best_submission_ids.append(best_submission.id)
-
-        best_submissions_queryset = self.submissions.filter(id__in=best_submission_ids)
-        return best_submissions_queryset
+        # One query with a correlated subquery instead of one query per student
+        # (previously O(n) queries for n distinct students, very slow for large
+        # exercises/courses).
+        best_submission_ids = (
+            self.submissions
+            .filter(student=models.OuterRef("student"))
+            .order_by("-grade", "-id")
+            .values("id")[:1]
+        )
+        return self.submissions.filter(id=models.Subquery(best_submission_ids))
 
     @property
     def flagged_submissions(self):
@@ -536,6 +535,13 @@ class Student(models.Model):
     class Meta:
         unique_together = ("course", "key")
         ordering = ["course", "key"]
+
+    @property
+    def display_name(self):
+        name = (self.name or "").strip()
+        if not name or name == "No Name":
+            return self.key
+        return name
 
     def __str__(self):
         return "%s: %s (%s)" % (self.course.name, self.key, self.created)
